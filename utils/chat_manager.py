@@ -39,8 +39,7 @@ class ChatManager:
         try:
             # Determine if the query needs document context
             needs_context = self._needs_document_context(query)
-            
-            # Get relevant context from vector store only if needed
+              # Get relevant context from vector store only if needed
             context_docs = []
             context = ""
             
@@ -55,8 +54,17 @@ class ChatManager:
                     context_docs = []
                     context = ""
             
+            # Debug: Print what we have
+            print(f"DEBUG - Query: {query}")
+            print(f"DEBUG - Needs context: {needs_context}")
+            print(f"DEBUG - Vector store initialized: {self.vector_store.is_initialized()}")
+            print(f"DEBUG - Context docs: {len(context_docs)}")
+            print(f"DEBUG - Context: {context[:100] if context else 'EMPTY'}")
+            
             # Create prompt
-            prompt = self._create_prompt(query, context, has_documents=bool(context_docs))            # Get response from Groq
+            prompt = self._create_prompt(query, context, has_documents=bool(context_docs))
+            
+            # Get response from Groq
             client = Groq(api_key=groq_api_key)
             
             # Create system message based on whether we have context
