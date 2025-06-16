@@ -16,8 +16,7 @@ class ChatManager:
         self.chat_history_path = chat_history_path
         self.vector_store = VectorStore()
         
-        # Create data directory if it doesn't exist
-        os.makedirs(os.path.dirname(chat_history_path), exist_ok=True)
+        # Create data directory if it doesn't exist        os.makedirs(os.path.dirname(chat_history_path), exist_ok=True)
         
         # Load existing chat history
         self.chat_history = self._load_chat_history()
@@ -38,20 +37,33 @@ class ChatManager:
         start_time = datetime.now()
         
         try:
-            # Get relevant context from vector store (if available)
+            # Determine if the query needs document context
+            needs_context = self._needs_document_context(query)
+            
+            # Get relevant context from vector store only if needed
             context_docs = []
             context = ""
             
-            if self.vector_store.is_initialized():
+            if needs_context and self.vector_store.is_initialized():
                 context_docs = self.vector_store.search(query, k=5)
-                context = self._build_context(context_docs, max_context_length)
-            else:
-                context = "No documents are available in the knowledge base."
+                # Only use context if it's actually relevant (good similarity scores)
+                relevant_docs = [(text, score) for text, score in context_docs if score > 0.3]
+                if relevant_docs:
+                    context_docs = relevant_docs
+                    context = self._build_context(context_docs, max_context_length)
+                else:
+                    context_docs = []
+                    context = ""
             
             # Create prompt
-            prompt = self._create_prompt(query, context, has_documents=bool(context_docs))
-              # Get response from Groq
+            prompt = self._create_prompt(query, context, has_documents=bool(context_docs))            # Get response from Groq
             client = Groq(api_key=groq_api_key)
+            
+            # Create system message based on whether we have context
+            if context_docs:
+                system_message = """You are a helpful AI assistant. When provided with context from documents, use that information to answer questions accurately. When no document context is provided, respond naturally as a conversational AI. Always be concise, accurate, and friendly."""
+            else:
+                system_message = """You are a helpful AI assistant. Respond naturally and conversationally to user messages. Be friendly, concise, and helpful."""
             
             # Handle possible model errors gracefully
             try:
@@ -60,7 +72,7 @@ class ChatManager:
                     messages=[
                         {
                             "role": "system",
-                            "content": """You are a helpful AI assistant. If context from documents is provided, use it to answer questions. If no documents are available, provide helpful general answers. Always be concise, accurate, and friendly in your responses."""
+                            "content": system_message
                         },
                         {
                             "role": "user",
@@ -82,7 +94,7 @@ class ChatManager:
                         messages=[
                             {
                                 "role": "system",
-                                "content": """You are a helpful AI assistant. If context from documents is provided, use it to answer questions. If no documents are available, provide helpful general answers. Always be concise, accurate, and friendly in your responses."""
+                                "content": system_message
                             },
                             {
                                 "role": "user",
@@ -139,8 +151,7 @@ class ChatManager:
                 break
             
             context_parts.append(doc_text)
-            current_length += len(doc_text)
-        
+            current_length += len(doc_text)        
         return "\n\n".join(context_parts)
     
     def _create_prompt(self, query: str, context: str, has_documents: bool = True) -> str:
@@ -155,17 +166,16 @@ class ChatManager:
         Returns:
             Formatted prompt
         """
-        if has_documents:
+        if has_documents and context.strip():
             prompt = f"""Context from documents:
 {context}
 
 Question: {query}
 
-Please answer the question based primarily on the provided context. If the context doesn't contain enough information to fully answer the question, please indicate what information is missing and provide any general knowledge that might be helpful."""
+Please answer the question based primarily on the provided context. If the context doesn't contain enough information to fully answer the question, you can supplement with general knowledge, but make it clear what comes from the documents vs. general knowledge."""
         else:
-            prompt = f"""Question: {query}
-
-Note: No specific documents are available for reference, so please provide a helpful answer based on your general knowledge. Be informative, accurate, and helpful in your response."""
+            # For simple queries or when no relevant context is found
+            prompt = query
         
         return prompt
     
@@ -272,3 +282,48 @@ Note: No specific documents are available for reference, so please provide a hel
             'general_chats': general_chats,
             'unique_days': len(set(conv['timestamp'][:10] for conv in self.chat_history))
         }
+    
+    def _needs_document_context(self, query: str) -> bool:
+        """
+        Determine if a query needs document context based on its content
+        
+        Args:
+            query: User's question
+            
+        Returns:
+            True if the query likely needs document context, False otherwise
+        """
+        query_lower = query.lower().strip()
+        
+        # Simple greetings and conversational phrases that don't need context
+        simple_phrases = [
+            'hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening',
+            'how are you', 'what\'s up', 'thanks', 'thank you', 'bye', 'goodbye',
+            'ok', 'okay', 'yes', 'no', 'sure', 'alright', 'cool', 'nice'
+        ]
+        
+        # Check if the query is just a simple greeting/phrase
+        if query_lower in simple_phrases:
+            return False
+        
+        # Check if it's a very short query (likely greeting)
+        if len(query_lower.split()) <= 2 and any(phrase in query_lower for phrase in simple_phrases):
+            return False
+        
+        # Questions that typically need document context
+        context_indicators = [
+            'what is', 'what are', 'how to', 'explain', 'describe', 'tell me about',
+            'definition of', 'meaning of', 'according to', 'based on', 'document',
+            'text', 'chapter', 'section', 'page', 'book', 'paper', 'study'
+        ]
+        
+        # If it contains context indicators, it likely needs documents
+        if any(indicator in query_lower for indicator in context_indicators):
+            return True
+        
+        # For medium to long queries, assume they might need context
+        if len(query_lower.split()) >= 5:
+            return True
+        
+        # Default: don't use context for short, simple queries
+        return False
